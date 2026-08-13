@@ -44,7 +44,7 @@ def to_hex_spaced(bs: bytes) -> str:
 
 
 SUPPORTED_MANUFACTURERS = [
-    "Generic", "Bambu Lab", "Sunlu", "eSUN", "Overture", "Creality", "Polymaker", "Elegoo",
+    "Bambu Lab", "Generic", "Sunlu", "eSUN", "Overture", "Creality", "Polymaker", "Elegoo",
     "Prusament", "YOUSU", "Anycubic", "Amazon Basics", "Hatchbox", "Inland", "Eryone",
     "Flashforge", "MatterHackers", "ColorFabb", "Fillamentum", "TTYT3D", "COMGROW",
     "Protopasta", "Atomic Filament", "3DXTech", "Fiberlogy", "FormFutura", "ZIRO", "Geeetech",
@@ -68,7 +68,6 @@ class BtagGeneratorGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("BambuTagger Generator")
-        self.root.attributes("-topmost", True)
         self.root.lift()
         self.root.focus_force()
 
@@ -86,7 +85,7 @@ class BtagGeneratorGUI:
 
         # Manufacturer dropdown
         ttk.Label(frm, text="Manufacturer").grid(row=1, column=0, sticky="w", pady=6)
-        self.manufacturer_var = tk.StringVar(value="Generic")
+        self.manufacturer_var = tk.StringVar(value="Bambu Lab")
         self.manufacturer_cb = ttk.Combobox(
             frm, textvariable=self.manufacturer_var,
             values=SUPPORTED_MANUFACTURERS, state="readonly", width=37
@@ -117,7 +116,7 @@ class BtagGeneratorGUI:
         color_row = ttk.Frame(frm)
         color_row.grid(row=4, column=1, sticky="ew", pady=6)
 
-        self.color_hex_var = tk.StringVar(value="#CCDA46")
+        self.color_hex_var = tk.StringVar(value="#FFFFFF")
         self.color_entry = ttk.Entry(color_row, textvariable=self.color_hex_var, width=15)
         self.color_entry.grid(row=0, column=0, padx=(0, 8), sticky="w")
 
@@ -126,7 +125,7 @@ class BtagGeneratorGUI:
         )
         self.color_preview.grid(row=0, column=1)
 
-        ttk.Button(color_row, text="Pick...", command=self.pick_color).grid(row=0, column=2, padx=(10, 0))
+        ttk.Button(color_row, text="Set Color", command=self.pick_color).grid(row=0, column=2, padx=(10, 0))
 
         self.color_hex_var.trace_add("write", self.update_color_preview)
 
@@ -143,7 +142,7 @@ class BtagGeneratorGUI:
         btn_row.columnconfigure(0, weight=1)
         btn_row.columnconfigure(1, weight=1)
 
-        ttk.Button(btn_row, text="Generate .btag", command=self.generate).grid(
+        ttk.Button(btn_row, text="Generate tag", command=self.generate).grid(
             row=0, column=0, sticky="ew"
         )
         ttk.Button(btn_row, text="Quit", command=root.destroy).grid(
@@ -169,7 +168,7 @@ class BtagGeneratorGUI:
             pass
 
     def pick_color(self):
-        picked = colorchooser.askcolor(color=self.color_hex_var.get(), title="Choose Color", parent=self.root)
+        picked = colorchooser.askcolor(color=self.color_hex_var.get(), title="Set Color", parent=self.root)
         if picked and picked[1]:
             self.color_hex_var.set(picked[1].upper())
 
@@ -225,7 +224,7 @@ class BtagGeneratorGUI:
             script_dir = Path(__file__).resolve().parent
             generated_dir = script_dir / "Generated"
             generated_dir.mkdir(exist_ok=True)
-            
+
             # Save the file in the Generated subfolder
             out_path = generated_dir / filename
             out_path.write_text("\n".join(lines), encoding="utf-8")
