@@ -1,0 +1,240 @@
+import os
+import re
+import struct
+import secrets
+from pathlib import Path
+import sys
+import tkinter as tk
+
+if __name__ == "__main__" and sys.platform.startswith("win"):
+    # Prevent console from being needed when double-clicking (works mainly when packaged/with pyw)
+    pass
+
+from tkinter import ttk
+from tkinter import colorchooser, messagebox
+
+
+def parse_hex_color(color: str) -> bytes:
+    c = color.strip()
+    if c.startswith("#"):
+        c = c[1:]
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", c):
+        raise ValueError("Color must be in form #RRGGBB (e.g. #CCDA46).")
+    r = int(c[0:2], 16)
+    g = int(c[2:4], 16)
+    b = int(c[4:6], 16)
+    return bytes([r, g, b])
+
+
+def ascii_16(text: str) -> bytes:
+    b = text.encode("ascii", errors="strict")
+    if len(b) > 16:
+        raise ValueError(f"Text too long for 16-byte field: {text!r} ({len(b)} bytes)")
+    return b + b"\x00" * (16 - len(b))
+
+
+def weight_to_uint16_le(weight_g: int) -> bytes:
+    if not (0 <= weight_g <= 65535):
+        raise ValueError("Weight must be 0..65535 grams.")
+    return struct.pack("<H", weight_g)
+
+
+def to_hex_spaced(bs: bytes) -> str:
+    return " ".join(f"{b:02X}" for b in bs)
+
+
+SUPPORTED_MANUFACTURERS = [
+    "Generic", "Bambu Lab", "Sunlu", "eSUN", "Overture", "Creality", "Polymaker", "Elegoo",
+    "Prusament", "YOUSU", "Anycubic", "Amazon Basics", "Hatchbox", "Inland", "Eryone",
+    "Flashforge", "MatterHackers", "ColorFabb", "Fillamentum", "TTYT3D", "COMGROW",
+    "Protopasta", "Atomic Filament", "3DXTech", "Fiberlogy", "FormFutura", "ZIRO", "Geeetech",
+    "Duramic"
+]
+
+DETAILS_BY_TYPE = {
+    "PLA": ["Basic", "Matte", "Metal", "Silk", "Sparkle", "Tough", "PLA-CF", "Generic"],
+    "PETG": ["Basic", "Translucent", "HF", "PETG-CF", "Generic"],
+    "ABS": ["Standard", "ABS-GF", "Generic"],
+    "ASA": ["Standard", "ASA-Aero", "Generic"],
+    "TPU": ["95A HF", "95A", "TPU for AMS", "Generic"],
+    "PA (Nylon)": ["PA-CF", "PA6-CF", "Generic"],
+    "PC": ["Standard", "Generic"],
+    "PET-CF": ["Standard"],
+    "Support": ["Support W", "Support G", "Support PLA", "PVA"],
+}
+
+
+class BtagGeneratorGUI:
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("Generate .btag file")
+        self.root.attributes("-topmost", True)
+        self.root.lift()
+        self.root.focus_force()
+
+        frm = ttk.Frame(root, padding=12)
+        frm.grid(row=0, column=0, sticky="nsew")
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+
+        # Output file name
+        ttk.Label(frm, text="Output file name (.btag)").grid(row=0, column=0, sticky="w", pady=6)
+        self.filename_var = tk.StringVar(value="")
+        ttk.Entry(frm, textvariable=self.filename_var, width=40).grid(row=0, column=1, sticky="ew", pady=6)
+
+        frm.columnconfigure(1, weight=1)
+
+        # Manufacturer dropdown
+        ttk.Label(frm, text="Manufacturer").grid(row=1, column=0, sticky="w", pady=6)
+        self.manufacturer_var = tk.StringVar(value="Generic")
+        self.manufacturer_cb = ttk.Combobox(
+            frm, textvariable=self.manufacturer_var,
+            values=SUPPORTED_MANUFACTURERS, state="readonly", width=37
+        )
+        self.manufacturer_cb.grid(row=1, column=1, sticky="ew", pady=6)
+
+        # Type dropdown
+        ttk.Label(frm, text="Type").grid(row=2, column=0, sticky="w", pady=6)
+        self.type_var = tk.StringVar(value="PLA")
+        self.type_cb = ttk.Combobox(
+            frm, textvariable=self.type_var,
+            values=list(DETAILS_BY_TYPE.keys()), state="readonly", width=37
+        )
+        self.type_cb.grid(row=2, column=1, sticky="ew", pady=6)
+        self.type_cb.bind("<<ComboboxSelected>>", self.on_type_change)
+
+        # Detail dropdown (depends on Type)
+        ttk.Label(frm, text="Detail").grid(row=3, column=0, sticky="w", pady=6)
+        self.detail_var = tk.StringVar(value="Basic")
+        self.detail_cb = ttk.Combobox(
+            frm, textvariable=self.detail_var, state="readonly", width=37
+        )
+        self.detail_cb.grid(row=3, column=1, sticky="ew", pady=6)
+        self.on_type_change()  # set initial Detail options
+
+        # Color picker
+        ttk.Label(frm, text="Color (#RRGGBB)").grid(row=4, column=0, sticky="w", pady=6)
+        color_row = ttk.Frame(frm)
+        color_row.grid(row=4, column=1, sticky="ew", pady=6)
+
+        self.color_hex_var = tk.StringVar(value="#CCDA46")
+        self.color_entry = ttk.Entry(color_row, textvariable=self.color_hex_var, width=15)
+        self.color_entry.grid(row=0, column=0, padx=(0, 8), sticky="w")
+
+        self.color_preview = ttk.Label(
+            color_row, text="      ", background=self.color_hex_var.get(), relief="groove", width=8
+        )
+        self.color_preview.grid(row=0, column=1)
+
+        ttk.Button(color_row, text="Pick...", command=self.pick_color).grid(row=0, column=2, padx=(10, 0))
+
+        self.color_hex_var.trace_add("write", self.update_color_preview)
+
+        # Weight
+        ttk.Label(frm, text="Weight (grams)").grid(row=5, column=0, sticky="w", pady=6)
+        self.weight_var = tk.StringVar(value="1000")
+        ttk.Spinbox(frm, textvariable=self.weight_var, from_=0, to=65535, width=37).grid(
+            row=5, column=1, sticky="ew", pady=6
+        )
+
+        # Buttons
+        btn_row = ttk.Frame(frm)
+        btn_row.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        btn_row.columnconfigure(0, weight=1)
+        btn_row.columnconfigure(1, weight=1)
+
+        ttk.Button(btn_row, text="Generate .btag", command=self.generate).grid(
+            row=0, column=0, sticky="ew"
+        )
+        ttk.Button(btn_row, text="Quit", command=root.destroy).grid(
+            row=0, column=1, sticky="ew", padx=(10, 0)
+        )
+
+    def on_type_change(self, _evt=None):
+        t = self.type_var.get().strip()
+        details = DETAILS_BY_TYPE.get(t, ["Generic"])
+        self.detail_cb["values"] = details
+        if self.detail_var.get().strip() not in details:
+            self.detail_var.set(details[0])
+
+    def update_color_preview(self, *_):
+        c = self.color_hex_var.get().strip()
+        if not c.startswith("#"):
+            c = "#" + c
+        try:
+            _ = parse_hex_color(c)
+            self.color_preview.configure(background=c)
+        except Exception:
+            # ignore invalid while typing
+            pass
+
+    def pick_color(self):
+        picked = colorchooser.askcolor(color=self.color_hex_var.get(), title="Choose Color", parent=self.root)
+        if picked and picked[1]:
+            self.color_hex_var.set(picked[1].upper())
+
+    def generate(self):
+        try:
+            filename = self.filename_var.get().strip()
+            if not filename.lower().endswith(".btag"):
+                filename += ".btag"
+
+            manufacturer = self.manufacturer_var.get().strip()
+            if manufacturer not in SUPPORTED_MANUFACTURERS:
+                raise ValueError("Manufacturer is not in the supported list.")
+
+            type_str = self.type_var.get().strip()
+            if type_str not in DETAILS_BY_TYPE:
+                raise ValueError("Type is invalid.")
+
+            detail_str = self.detail_var.get().strip()
+            if detail_str not in DETAILS_BY_TYPE[type_str]:
+                raise ValueError(f"Detail must be one of: {', '.join(DETAILS_BY_TYPE[type_str])}")
+
+            color_bytes = parse_hex_color(self.color_hex_var.get().strip())
+            weight_g = int(self.weight_var.get().strip(), 10)
+            weight_bytes = weight_to_uint16_le(weight_g)
+
+            uid = secrets.token_bytes(4)
+
+            block_1 = bytes.fromhex("00 00 00 00 00 00 00 00 47 46 41 30 30 00 00 00")
+            block_2 = ascii_16(type_str)
+            block_4 = ascii_16(detail_str)
+            block_6 = ascii_16(manufacturer)
+
+            block_5 = bytearray()
+            block_5 += color_bytes
+            block_5 += b"\xFF"
+            block_5 += weight_bytes
+            block_5 += b"\x00" * (16 - len(block_5))
+
+            lines = [
+                "Filetype: Bambu Tag",
+                "Version: 1",
+                f"UID: {to_hex_spaced(uid)}",
+                "UID_len: 4",
+                f"Block_1: {to_hex_spaced(block_1)}",
+                f"Block_2: {to_hex_spaced(block_2)}",
+                f"Block_4: {to_hex_spaced(block_4)}",
+                f"Block_5: {to_hex_spaced(bytes(block_5))}",
+                f"Block_6: {to_hex_spaced(block_6)}",
+                "",
+            ]
+
+            script_dir = Path(__file__).resolve().parent
+            out_path = script_dir / filename
+            out_path.write_text("\n".join(lines), encoding="utf-8")
+
+            messagebox.showinfo("Done", f"Wrote:\n{out_path}")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+
+def main():
+    root = tk.Tk()
+    BtagGeneratorGUI(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
