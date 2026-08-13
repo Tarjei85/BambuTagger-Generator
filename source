@@ -221,8 +221,13 @@ class BtagGeneratorGUI:
                 "",
             ]
 
+            # Create the Generated subfolder if it doesn't exist
             script_dir = Path(__file__).resolve().parent
-            out_path = script_dir / filename
+            generated_dir = script_dir / "Generated"
+            generated_dir.mkdir(exist_ok=True)
+            
+            # Save the file in the Generated subfolder
+            out_path = generated_dir / filename
             out_path.write_text("\n".join(lines), encoding="utf-8")
 
             messagebox.showinfo("Done", f"Wrote:\n{out_path}")
